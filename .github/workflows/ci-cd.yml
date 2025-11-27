@@ -8,7 +8,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   test:
@@ -70,8 +69,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    outputs:
-      image-tag: ${{ steps.image-info.outputs.image-tag }}
     
     steps:
       - name: Checkout code
@@ -87,11 +84,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Convert repository name to lowercase
+        id: repo
+        run: |
+          echo "repository=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.repository }}
           tags: |
             type=sha,prefix={{branch}}-
             type=raw,value=latest,enable={{is_default_branch}}
@@ -106,17 +108,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Set image tag for testing
-        id: image-info
-        run: |
-          # Use the latest tag for testing
-          IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
-          echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
-          echo "Will test image: $IMAGE_TAG"
-
       - name: Test Docker image
         run: |
-          IMAGE_TAG="${{ steps.image-info.outputs.image-tag }}"
+          IMAGE_TAG="${{ env.REGISTRY }}/${{ steps.repo.outputs.repository }}:latest"
           echo "Pulling image: $IMAGE_TAG"
           docker pull "$IMAGE_TAG"
           
@@ -126,7 +120,7 @@ jobs:
           echo "Waiting for app to be ready..."
           for i in {1..30}; do
             if docker logs test-container 2>&1 | grep -q "Running on"; then
-              echo "App is ready!"
+              echo "✅ App is ready!"
               break
             fi
             echo "Attempt $i: Waiting..."
@@ -142,5 +136,5 @@ jobs:
           echo "Testing main endpoint..."
           curl -f http://localhost:5000/ || (docker logs test-container && exit 1)
           
-          echo "✅ All tests passed!"
+          echo "✅ All Docker tests passed!"
           docker stop test-container
