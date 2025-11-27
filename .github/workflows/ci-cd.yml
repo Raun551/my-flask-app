@@ -70,6 +70,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      image-tag: ${{ steps.image-info.outputs.image-tag }}
     
     steps:
       - name: Checkout code
@@ -100,13 +102,45 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Set image tag for testing
+        id: image-info
+        run: |
+          # Use the latest tag for testing
+          IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "Will test image: $IMAGE_TAG"
+
       - name: Test Docker image
         run: |
-          docker pull ${{ steps.meta.outputs.tags }}
-          docker run -d -p 5000:5000 --name test-container ${{ steps.meta.outputs.tags }}
-          sleep 5
-          curl -f http://localhost:5000/health || exit 1
+          IMAGE_TAG="${{ steps.image-info.outputs.image-tag }}"
+          echo "Pulling image: $IMAGE_TAG"
+          docker pull "$IMAGE_TAG"
+          
+          echo "Starting container..."
+          docker run -d -p 5000:5000 --name test-container "$IMAGE_TAG"
+          
+          echo "Waiting for app to be ready..."
+          for i in {1..30}; do
+            if docker logs test-container 2>&1 | grep -q "Running on"; then
+              echo "App is ready!"
+              break
+            fi
+            echo "Attempt $i: Waiting..."
+            sleep 2
+          done
+          
+          echo "Container logs:"
+          docker logs test-container
+          
+          echo "Testing health endpoint..."
+          curl -f http://localhost:5000/health || (docker logs test-container && exit 1)
+          
+          echo "Testing main endpoint..."
+          curl -f http://localhost:5000/ || (docker logs test-container && exit 1)
+          
+          echo "✅ All tests passed!"
           docker stop test-container
